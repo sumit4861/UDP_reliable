@@ -1,0 +1,21 @@
+name: Java KTP checks
+
+on:
+  push:
+    branches: ["main", "hardening/**"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  compile-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Compile all Java sources
+        run: javac -Xlint:all *.java
+      - name: Run protocol regression tests
+        run: java ProtocolUnitTests
