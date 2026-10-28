@@ -76,6 +76,8 @@ public class User2 {
                         byte[] receivedChunk = Arrays.copyOf(buffer, n);
                         if (Arrays.equals(receivedChunk, eofMarker)) {
                             System.out.println("[User2] End-of-file sentinel received.");
+                            // Linger so retransmitted EOF messages can be ACKed if an ACK was lost.
+                            Thread.sleep(KtpConstants.T * 3000L);
                             break;
                         }
                     }
