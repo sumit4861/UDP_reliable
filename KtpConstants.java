@@ -20,6 +20,7 @@ public class KtpConstants {
     public static final int ENOMESSAGE = 1003;
     public static final int ERRORNP = 1004;
     public static final int EBIND = 1005;
+    public static final int ETOOSMALL = 1006;
 
     // Packet types
     public static final byte TYPE_DATA = 0;
