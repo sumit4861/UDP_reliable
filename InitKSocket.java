@@ -5,6 +5,8 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Scanner;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * InitKSocket: The initialization daemon process for KTP sockets.
@@ -85,7 +87,7 @@ public class InitKSocket {
     }
 
     private void handleClient(Socket client) {
-        int allocatedSocketId = -1;
+        Set<Integer> allocatedSocketIds = new HashSet<>();
         long clientPid = 0;
         try (DataInputStream in = new DataInputStream(client.getInputStream());
              DataOutputStream out = new DataOutputStream(client.getOutputStream())) {
@@ -97,7 +99,7 @@ public class InitKSocket {
                         clientPid = in.readLong();
                         int fd = shm.allocateSocket(clientPid);
                         if (fd >= 0) {
-                            allocatedSocketId = fd;
+                            allocatedSocketIds.add(fd);
                         }
                         out.writeInt(fd);
                         out.flush();
@@ -182,9 +184,7 @@ public class InitKSocket {
                         int fd = in.readInt();
                         long pid = in.readLong();
                         int res = shm.closeSocket(fd, pid);
-                        if (fd == allocatedSocketId) {
-                            allocatedSocketId = -1;
-                        }
+                        allocatedSocketIds.remove(fd);
                         out.writeInt(res);
                         out.flush();
                         break;
@@ -226,9 +226,9 @@ public class InitKSocket {
         } catch (Exception e) {
             // Client disconnected
         } finally {
-            if (allocatedSocketId != -1) {
-                System.out.println("[InitKSocket] Process disconnected, auto-closing socket " + allocatedSocketId);
-                shm.closeSocket(allocatedSocketId, clientPid);
+            for (int socketId : allocatedSocketIds) {
+                System.out.println("[InitKSocket] Client disconnected, cleaning up socket " + socketId);
+                shm.closeSocket(socketId, clientPid);
             }
         }
     }
