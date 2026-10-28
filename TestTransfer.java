@@ -44,6 +44,7 @@ public class TestTransfer {
                         fos.write(buf, 0, n);
                     }
                 }
+                Thread.sleep(KtpConstants.T * 3000L);
                 KtpSocket.k_close(rfd);
                 System.out.println("Receiver closed socket.");
             } catch (Exception e) {
