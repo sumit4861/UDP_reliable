@@ -29,8 +29,10 @@ public class GarbageCollector extends Thread {
 
                 List<KtpSocketEntry> active = shm.getAllActiveSockets();
                 for (KtpSocketEntry entry : active) {
-                    if (entry.isAllotted && (now - entry.lastActiveTime > idleTimeoutMillis)) {
-                        System.out.println("[GarbageCollector] Cleaning up orphaned KTP socket " + entry.id +
+                    boolean ownerAlive = entry.processId > 0
+                            && ProcessHandle.of(entry.processId).map(ProcessHandle::isAlive).orElse(false);
+                    if (entry.isAllotted && !ownerAlive) {
+                        System.out.println("[GarbageCollector] Cleaning up socket owned by terminated process " + entry.id +
                                 " (process ID: " + entry.processId + ")");
                         shm.closeSocket(entry.id, entry.processId);
                     }
