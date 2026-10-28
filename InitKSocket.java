@@ -5,6 +5,8 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Scanner;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * InitKSocket: The initialization daemon process for KTP sockets.
@@ -25,6 +27,7 @@ public class InitKSocket {
     public static final byte CMD_CLOSE = 5;
     public static final byte CMD_STATS = 6;
     public static final byte CMD_SET_PARAMS = 7;
+    public static final byte CMD_ALL_ACKED = 8;
 
     private final KtpSharedMemory shm;
     private final ThreadR threadR;
@@ -84,7 +87,7 @@ public class InitKSocket {
     }
 
     private void handleClient(Socket client) {
-        int allocatedSocketId = -1;
+        Set<Integer> allocatedSocketIds = new HashSet<>();
         long clientPid = 0;
         try (DataInputStream in = new DataInputStream(client.getInputStream());
              DataOutputStream out = new DataOutputStream(client.getOutputStream())) {
@@ -96,7 +99,7 @@ public class InitKSocket {
                         clientPid = in.readLong();
                         int fd = shm.allocateSocket(clientPid);
                         if (fd >= 0) {
-                            allocatedSocketId = fd;
+                            allocatedSocketIds.add(fd);
                         }
                         out.writeInt(fd);
                         out.flush();
@@ -121,6 +124,11 @@ public class InitKSocket {
                     case CMD_SEND: {
                         int fd = in.readInt();
                         int len = in.readInt();
+                        if (len <= 0 || len > KtpConstants.MAX_MESSAGE_SIZE) {
+                            out.writeInt(-KtpConstants.EINVAL);
+                            out.flush();
+                            break;
+                        }
                         byte[] data = new byte[len];
                         in.readFully(data);
 
@@ -157,12 +165,14 @@ public class InitKSocket {
                         } else if (!entry.isBound) {
                             out.writeInt(-KtpConstants.ENOTBOUND);
                         } else {
-                            byte[] msg = entry.rwnd.readMessage();
-                            if (msg != null) {
+                            byte[] msg = entry.rwnd.peekMessage();
+                            if (msg != null && (maxLen < msg.length || maxLen <= 0)) {
+                                out.writeInt(-KtpConstants.ETOOSMALL);
+                            } else if (msg != null) {
+                                entry.rwnd.readMessage();
                                 entry.lastActiveTime = System.currentTimeMillis();
-                                int toRead = Math.min(msg.length, maxLen);
-                                out.writeInt(toRead);
-                                out.write(msg, 0, toRead);
+                                out.writeInt(msg.length);
+                                out.write(msg);
                             } else {
                                 out.writeInt(-KtpConstants.ENOMESSAGE);
                             }
@@ -174,9 +184,7 @@ public class InitKSocket {
                         int fd = in.readInt();
                         long pid = in.readLong();
                         int res = shm.closeSocket(fd, pid);
-                        if (fd == allocatedSocketId) {
-                            allocatedSocketId = -1;
-                        }
+                        allocatedSocketIds.remove(fd);
                         out.writeInt(res);
                         out.flush();
                         break;
@@ -191,6 +199,13 @@ public class InitKSocket {
                             out.writeInt(0);
                             out.writeInt(0);
                         }
+                        out.flush();
+                        break;
+                    }
+                    case CMD_ALL_ACKED: {
+                        int fd = in.readInt();
+                        KtpSocketEntry entry = shm.getSocket(fd);
+                        out.writeBoolean(entry != null && entry.isAllotted && entry.swnd.isAllAcknowledged());
                         out.flush();
                         break;
                     }
@@ -211,9 +226,9 @@ public class InitKSocket {
         } catch (Exception e) {
             // Client disconnected
         } finally {
-            if (allocatedSocketId != -1) {
-                System.out.println("[InitKSocket] Process disconnected, auto-closing socket " + allocatedSocketId);
-                shm.closeSocket(allocatedSocketId, clientPid);
+            for (int socketId : allocatedSocketIds) {
+                System.out.println("[InitKSocket] Client disconnected, cleaning up socket " + socketId);
+                shm.closeSocket(socketId, clientPid);
             }
         }
     }

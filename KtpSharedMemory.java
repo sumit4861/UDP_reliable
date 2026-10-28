@@ -64,17 +64,22 @@ public class KtpSharedMemory {
      * corresponding SM with destination IP and destination port.
      */
     public int bindSocket(int id, InetSocketAddress localAddr, InetSocketAddress remoteAddr, long processId) {
-        if (id < 0 || id >= smTable.length) {
-            return -1;
+        if (id < 0 || id >= smTable.length || localAddr == null || remoteAddr == null
+                || localAddr.getPort() < 1 || localAddr.getPort() > 65535
+                || remoteAddr.getPort() < 1 || remoteAddr.getPort() > 65535) {
+            return -KtpConstants.EBIND;
         }
         KtpSocketEntry entry = smTable[id];
         entry.lock.lock();
         try {
             if (!entry.isAllotted) {
-                return -1;
+                return -KtpConstants.ERRORNP;
             }
             if (entry.processId != 0 && processId != 0 && entry.processId != processId) {
                 return -KtpConstants.ERRORNP;
+            }
+            if (entry.isBound) {
+                return -KtpConstants.EBIND;
             }
 
             try {
@@ -108,23 +113,30 @@ public class KtpSharedMemory {
      * marks the entry as free.
      */
     public int closeSocket(int id, long processId) {
-        if (id < 0 || id >= smTable.length) {
-            return -1;
-        }
+        if (id < 0 || id >= smTable.length) return -1;
         KtpSocketEntry entry = smTable[id];
+
+        // Verify ownership without holding the lock while waiting for ACKs.
         entry.lock.lock();
         try {
-            if (!entry.isAllotted) {
-                return -1;
-            }
-            // Wait for in-flight packets to be acknowledged with reasonable timeout
-            long waitStart = System.currentTimeMillis();
-            while (!entry.swnd.isAllAcknowledged() && (System.currentTimeMillis() - waitStart < 3000)) {
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException ignored) {}
-            }
+            if (!entry.isAllotted || (entry.processId != 0 && entry.processId != processId)) return -1;
+        } finally {
+            entry.lock.unlock();
+        }
 
+        long waitStart = System.currentTimeMillis();
+        while (!entry.swnd.isAllAcknowledged() && System.currentTimeMillis() - waitStart < 3000) {
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+
+        entry.lock.lock();
+        try {
+            if (!entry.isAllotted || (entry.processId != 0 && entry.processId != processId)) return -1;
             entry.reset();
             return 1;
         } finally {

@@ -100,8 +100,14 @@ public class User1 {
 
             System.out.println("[User1] All data blocks queued (" + noOfMsgs + " messages). Waiting for acknowledgements...");
 
-            // Wait for transmission and ACKs to settle
-            Thread.sleep(2000);
+            // Wait for every queued message, including EOF, to be cumulatively ACKed.
+            long ackDeadline = System.currentTimeMillis() + 300000L;
+            while (!KtpSocket.isAllAcknowledged(fd) && System.currentTimeMillis() < ackDeadline) {
+                Thread.sleep(100);
+            }
+            if (!KtpSocket.isAllAcknowledged(fd)) {
+                System.err.println("[User1] ERROR: timed out waiting for ACKs; receiver may be unavailable.");
+            }
 
             long duration = System.currentTimeMillis() - startTime;
             int[] stats = KtpSocket.avg_calc(fd);
@@ -116,8 +122,8 @@ public class User1 {
             System.out.printf("Elapsed time: %.2f seconds\n", duration / 1000.0);
             System.out.println("----------------------------------------------------\n");
 
-            // Allow time for receiver to process and ACK
-            Thread.sleep(2000);
+            // Give the receiver time to consume the final queued message before close.
+            Thread.sleep(200);
             KtpSocket.k_close(fd);
             System.out.println("[User1] Socket closed successfully.");
 

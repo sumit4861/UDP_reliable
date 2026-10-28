@@ -1,43 +1,39 @@
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 
-/**
- * KTP Packet structure for transport layer communication.
- * Includes header fields for type, sequence number, piggybacked ACK,
- * receiver window (rwnd), length, checksum, and timestamp.
- */
+/** KTP wire packet with a fixed header and a payload of at most 512 bytes. */
 public class KtpPacket {
     public static final int HEADER_SIZE = 16;
 
-    public byte type;         // 0: DATA, 1: RETRANSMIT, 2: ACK, 3: PROBE, 4: FIN, 5: FIN_ACK
-    public int seqNum;        // 8-bit sequence number (0..255)
-    public int ackNum;        // 8-bit piggybacked acknowledgement number (0..255)
-    public int rwnd;          // 8-bit receiver window advertisement (0..WINDOW_SIZE)
-    public int len;           // Payload length (0..MAX_MESSAGE_SIZE)
-    public int checksum;      // 16-bit checksum
-    public long timestamp;    // Send timestamp in milliseconds
-    public byte[] payload;    // Payload data (up to MAX_MESSAGE_SIZE)
+    public byte type;
+    public int seqNum;
+    public int ackNum;
+    public int rwnd;
+    public int len;
+    public int checksum;
+    public long timestamp;
+    public byte[] payload;
 
-    // Internal tracking for retransmission count and send time
     public int transmitCount = 0;
     public long firstSentTime = 0;
     public long lastSentTime = 0;
 
     public KtpPacket() {
-        this.payload = new byte[0];
+        payload = new byte[0];
     }
 
     public KtpPacket(byte type, int seqNum, int ackNum, int rwnd, byte[] data, int offset, int length) {
+        if (length < 0 || length > KtpConstants.MAX_MESSAGE_SIZE
+                || (length > 0 && (data == null || offset < 0 || offset > data.length - length))) {
+            throw new IllegalArgumentException("Invalid KTP payload length or offset");
+        }
         this.type = type;
         this.seqNum = seqNum & 0xFF;
         this.ackNum = ackNum & 0xFF;
-        this.rwnd = rwnd & 0xFF;
+        this.rwnd = Math.max(0, Math.min(rwnd, KtpConstants.WINDOW_SIZE));
         this.len = length;
         this.timestamp = System.currentTimeMillis();
         this.payload = new byte[length];
-        if (data != null && length > 0) {
-            System.arraycopy(data, offset, this.payload, 0, length);
-        }
+        if (data != null && length > 0) System.arraycopy(data, offset, payload, 0, length);
         this.checksum = calculateChecksum();
     }
 
@@ -63,20 +59,16 @@ public class KtpPacket {
 
     public int calculateChecksum() {
         int sum = (type & 0xFF) + (seqNum & 0xFF) + (ackNum & 0xFF) + (rwnd & 0xFF) + len;
-        if (payload != null) {
-            for (byte b : payload) {
-                sum += (b & 0xFF);
-            }
-        }
+        if (payload != null) for (byte b : payload) sum += b & 0xFF;
         return sum & 0xFFFF;
     }
 
     public boolean verifyChecksum() {
-        return this.checksum == calculateChecksum();
+        return checksum == calculateChecksum();
     }
 
     public byte[] toBytes() {
-        this.checksum = calculateChecksum();
+        checksum = calculateChecksum();
         ByteBuffer bb = ByteBuffer.allocate(HEADER_SIZE + len);
         bb.put(type);
         bb.put((byte) (seqNum & 0xFF));
@@ -85,16 +77,17 @@ public class KtpPacket {
         bb.putShort((short) len);
         bb.putShort((short) checksum);
         bb.putLong(timestamp);
-        if (payload != null && len > 0) {
-            bb.put(payload, 0, len);
-        }
+        if (payload != null && len > 0) bb.put(payload, 0, len);
         return bb.array();
     }
 
+    /**
+     * Returns null for malformed packets rather than silently converting a bad
+     * payload length into a valid empty packet.
+     */
     public static KtpPacket fromBytes(byte[] raw, int offset, int length) {
-        if (length < HEADER_SIZE) {
-            return null;
-        }
+        if (raw == null || offset < 0 || length < HEADER_SIZE || offset > raw.length - length) return null;
+
         ByteBuffer bb = ByteBuffer.wrap(raw, offset, length);
         KtpPacket pkt = new KtpPacket();
         pkt.type = bb.get();
@@ -105,13 +98,18 @@ public class KtpPacket {
         pkt.checksum = bb.getShort() & 0xFFFF;
         pkt.timestamp = bb.getLong();
 
-        if (pkt.len > 0 && pkt.len <= (length - HEADER_SIZE)) {
-            pkt.payload = new byte[pkt.len];
-            bb.get(pkt.payload, 0, pkt.len);
-        } else {
-            pkt.payload = new byte[0];
-            pkt.len = 0;
+        if (pkt.type < KtpConstants.TYPE_DATA || pkt.type > KtpConstants.TYPE_FIN_ACK
+                || pkt.rwnd > KtpConstants.WINDOW_SIZE
+                || pkt.len > KtpConstants.MAX_MESSAGE_SIZE
+                || length != HEADER_SIZE + pkt.len) return null;
+        if (pkt.type == KtpConstants.TYPE_DATA || pkt.type == KtpConstants.TYPE_RETRANSMIT) {
+            if (pkt.len == 0) return null;
+        } else if (pkt.len != 0) {
+            return null;
         }
+
+        pkt.payload = new byte[pkt.len];
+        if (pkt.len > 0) bb.get(pkt.payload);
         return pkt;
     }
 

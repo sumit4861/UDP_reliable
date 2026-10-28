@@ -70,6 +70,12 @@ public class ThreadR extends Thread {
                         continue;
                     }
 
+                    // Only accept datagrams from the configured peer for this KTP socket.
+                    if (!(senderAddr instanceof InetSocketAddress) || entry.remoteAddr == null
+                            || !entry.remoteAddr.equals(senderAddr)) {
+                        continue;
+                    }
+
                     recvBuffer.flip();
                     int bytesRead = recvBuffer.remaining();
                     if (bytesRead < KtpPacket.HEADER_SIZE) {

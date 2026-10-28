@@ -56,8 +56,8 @@ public class User2 {
                     if (n < 0 && KtpSocket.getErrno() == KtpConstants.ENOMESSAGE) {
                         Thread.sleep(50);
                         emptyConsecutiveCount++;
-                        // If we've already received data and no new message arrives for 10 seconds, finish
-                        if (totalBytesReceived > 0 && emptyConsecutiveCount > 200) {
+                        // If we've already received data and no new message arrives for 60 seconds, finish
+                        if (totalBytesReceived > 0 && emptyConsecutiveCount > 1200) {
                             System.out.println("[User2] No more data received for timeout period. Finishing.");
                             break;
                         }
@@ -76,6 +76,8 @@ public class User2 {
                         byte[] receivedChunk = Arrays.copyOf(buffer, n);
                         if (Arrays.equals(receivedChunk, eofMarker)) {
                             System.out.println("[User2] End-of-file sentinel received.");
+                            // Linger so retransmitted EOF messages can be ACKed if an ACK was lost.
+                            Thread.sleep(KtpConstants.T * 3000L);
                             break;
                         }
                     }

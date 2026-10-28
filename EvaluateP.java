@@ -100,7 +100,8 @@ public class EvaluateP {
                             fos.write(buffer, 0, n);
                         }
                     }
-                    Thread.sleep(500);
+                    // Keep the socket open to ACK duplicate EOF retransmissions after ACK loss.
+                    Thread.sleep(KtpConstants.T * 3000L);
                     KtpSocket.k_close(rfd);
                 } catch (Exception e) {
                     e.printStackTrace();
