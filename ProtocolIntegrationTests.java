@@ -48,7 +48,12 @@ public final class ProtocolIntegrationTests {
                         }
                         throw new AssertionError("receiver read failed: " + KtpSocket.getErrno());
                     }
-                    if (n == EOF.length && Arrays.equals(Arrays.copyOf(buffer, n), EOF)) return;
+                    if (n == EOF.length && Arrays.equals(Arrays.copyOf(buffer, n), EOF)) {
+                        // Keep the receive socket alive for duplicate EOF retransmissions
+                        // if the final ACK was lost.
+                        Thread.sleep(KtpConstants.T * 3000L);
+                        return;
+                    }
                     received.write(buffer, 0, n);
                 }
                 throw new AssertionError("receiver timed out waiting for EOF");
