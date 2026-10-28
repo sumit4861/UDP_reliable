@@ -2,10 +2,7 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
 
-/**
- * Receiver-side KTP window. Buffers in-order messages for the application and
- * temporarily holds out-of-order messages until the missing sequence arrives.
- */
+/** Receiver-side KTP window with ordered delivery and bounded reordering storage. */
 public class ReceiveWindow {
     private final int windowCapacity = KtpConstants.WINDOW_SIZE;
     private final LinkedList<byte[]> inOrderQueue = new LinkedList<>();
@@ -21,41 +18,29 @@ public class ReceiveWindow {
         return Math.max(0, windowCapacity - inOrderQueue.size() - outOfOrderMap.size());
     }
 
-    /**
-     * Processes an accepted DATA/RETRANSMIT packet. Out-of-order packets are
-     * buffered but deliberately do not trigger an ACK, matching the assignment.
-     */
+    /** Out-of-order packets are buffered within the receive sequence window but not ACKed. */
     public synchronized KtpPacket processDataPacket(KtpPacket pkt) {
         if (pkt == null || pkt.seqNum < 0 || pkt.seqNum >= KtpConstants.MAX_SEQ_NUM
-                || pkt.len < 0 || pkt.len > KtpConstants.MAX_MESSAGE_SIZE
-                || pkt.payload == null || pkt.payload.length < pkt.len) {
+                || pkt.len <= 0 || pkt.len > KtpConstants.MAX_MESSAGE_SIZE
+                || pkt.payload == null || pkt.payload.length != pkt.len) {
             return hasAck ? KtpPacket.createAckPacket(lastAckedSeq, getFreeSpace()) : null;
         }
 
         int seq = pkt.seqNum;
         int dist = (seq - expSeq + KtpConstants.MAX_SEQ_NUM) % KtpConstants.MAX_SEQ_NUM;
         int free = getFreeSpace();
-        int occupiedOutOfOrder = outOfOrderMap.size();
-        // A sliding receive window covers buffered out-of-order slots as well
-        // as currently free slots, capped at the configured window size.
-        int receiveSpan = Math.min(windowCapacity, free + occupiedOutOfOrder);
 
-        // Anything at least half a sequence space ahead is old/stale under
-        // serial-number arithmetic; the live window is at most 10 packets.
-        if (dist >= KtpConstants.MAX_SEQ_NUM / 2 || outOfOrderMap.containsKey(seq)) {
+        // The valid sequence window is bounded by its capacity, not by the
+        // instantaneous free count; buffer occupancy is checked separately.
+        if (dist >= windowCapacity || free == 0) {
             return hasAck ? KtpPacket.createAckPacket(lastAckedSeq, free) : null;
         }
-
-        if (dist >= receiveSpan || free == 0) {
-            return hasAck ? KtpPacket.createAckPacket(lastAckedSeq, free) : null;
-        }
-
-        byte[] data = new byte[pkt.len];
-        System.arraycopy(pkt.payload, 0, data, 0, pkt.len);
 
         if (dist == 0) {
+            byte[] data = pkt.payload.clone();
             inOrderQueue.addLast(data);
             advanceExpSeq();
+
             while (outOfOrderMap.containsKey(expSeq)) {
                 inOrderQueue.addLast(outOfOrderMap.remove(expSeq));
                 advanceExpSeq();
@@ -69,11 +54,18 @@ public class ReceiveWindow {
             return KtpPacket.createAckPacket(lastAckedSeq, updatedRwnd);
         }
 
-        // Out-of-order: store only once, and intentionally do not ACK.
-        outOfOrderMap.put(seq, data);
-        if (getFreeSpace() == 0) {
-            nospace = true;
+        // A packet already buffered is a duplicate; do not store it twice.
+        if (outOfOrderMap.containsKey(seq)) {
+            return hasAck ? KtpPacket.createAckPacket(lastAckedSeq, free) : null;
         }
+
+        // Old/stale sequence numbers map near the end of the modulo space.
+        if (dist >= KtpConstants.MAX_SEQ_NUM / 2) {
+            return hasAck ? KtpPacket.createAckPacket(lastAckedSeq, free) : null;
+        }
+
+        outOfOrderMap.put(seq, pkt.payload.clone());
+        if (getFreeSpace() == 0) nospace = true;
         return null;
     }
 
@@ -85,9 +77,11 @@ public class ReceiveWindow {
         return inOrderQueue.peekFirst();
     }
 
-    /** Removes and returns the next whole message, or null when empty. */
+    /** Removes and returns a whole message, or null if none is available. */
     public synchronized byte[] readMessage() {
-        return inOrderQueue.pollFirst();
+        byte[] message = inOrderQueue.pollFirst();
+        if (message != null && getFreeSpace() > 0) nospace = true;
+        return message;
     }
 
     public synchronized KtpPacket checkNospaceRecovery() {
@@ -98,8 +92,6 @@ public class ReceiveWindow {
             lastRecoveryAckTime = now;
             return KtpPacket.createAckPacket(lastAckedSeq, free);
         }
-        // Window-update ACKs are repeated periodically because one update may
-        // itself be lost on the simulated unreliable channel.
         if (hasAck && free > 0 && now - lastRecoveryAckTime >= 1000) {
             lastRecoveryAckTime = now;
             return KtpPacket.createAckPacket(lastAckedSeq, free);
