@@ -19,3 +19,5 @@ jobs:
         run: javac -Xlint:all *.java
       - name: Run protocol regression tests
         run: java ProtocolUnitTests
+      - name: Run end-to-end transfer tests
+        run: java ProtocolIntegrationTests
