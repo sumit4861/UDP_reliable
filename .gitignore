@@ -1,0 +1,7 @@
+# Java build outputs
+*.class
+*.jar
+
+# Runtime output and temporary transfer files
+output*.txt
+test_output.txt
