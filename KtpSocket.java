@@ -243,7 +243,8 @@ public class KtpSocket {
             try {
                 ipcOut.writeByte(InitKSocket.CMD_RECV);
                 ipcOut.writeInt(fd);
-                ipcOut.writeInt(maxLen);
+                int capacity = Math.min(maxLen, buf.length);
+                ipcOut.writeInt(capacity);
                 ipcOut.flush();
 
                 int res = ipcIn.readInt();
