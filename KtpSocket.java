@@ -150,7 +150,10 @@ public class KtpSocket {
      * Returns number of bytes written, or -1 with errno set to ENOSPACE or ENOTBOUND.
      */
     public static synchronized int k_sendto(int fd, byte[] buf, int len) {
-        if (buf == null || len <= 0) return -1;
+        if (buf == null || len <= 0 || len > buf.length || len > KtpConstants.MAX_MESSAGE_SIZE) {
+            errno.set(KtpConstants.EINVAL);
+            return -1;
+        }
         ensureConnection();
 
         if (useEmbedded) {
@@ -222,12 +225,16 @@ public class KtpSocket {
                 errno.set(KtpConstants.ENOTBOUND);
                 return -1;
             }
-            byte[] msg = entry.rwnd.readMessage();
+            byte[] msg = entry.rwnd.peekMessage();
             if (msg != null) {
+                if (msg.length > maxLen || msg.length > buf.length) {
+                    errno.set(KtpConstants.ETOOSMALL);
+                    return -1;
+                }
+                entry.rwnd.readMessage();
                 entry.lastActiveTime = System.currentTimeMillis();
-                int toRead = Math.min(msg.length, maxLen);
-                System.arraycopy(msg, 0, buf, 0, toRead);
-                return toRead;
+                System.arraycopy(msg, 0, buf, 0, msg.length);
+                return msg.length;
             } else {
                 errno.set(KtpConstants.ENOMESSAGE);
                 return -1;
@@ -309,11 +316,17 @@ public class KtpSocket {
         ensureConnection();
         if (useEmbedded) {
             KtpSocketEntry entry = embeddedShm.getSocket(fd);
-            if (entry != null) {
-                return entry.swnd.isAllAcknowledged();
-            }
+            return entry != null && entry.swnd.isAllAcknowledged();
         }
-        return true;
+        try {
+            ipcOut.writeByte(InitKSocket.CMD_ALL_ACKED);
+            ipcOut.writeInt(fd);
+            ipcOut.flush();
+            return ipcIn.readBoolean();
+        } catch (Exception e) {
+            errno.set(KtpConstants.ERRORNP);
+            return false;
+        }
     }
 
     public static synchronized void setProtocolParams(int t, double p) {
