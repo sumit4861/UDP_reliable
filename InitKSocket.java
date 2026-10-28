@@ -25,6 +25,7 @@ public class InitKSocket {
     public static final byte CMD_CLOSE = 5;
     public static final byte CMD_STATS = 6;
     public static final byte CMD_SET_PARAMS = 7;
+    public static final byte CMD_ALL_ACKED = 8;
 
     private final KtpSharedMemory shm;
     private final ThreadR threadR;
@@ -121,6 +122,11 @@ public class InitKSocket {
                     case CMD_SEND: {
                         int fd = in.readInt();
                         int len = in.readInt();
+                        if (len <= 0 || len > KtpConstants.MAX_MESSAGE_SIZE) {
+                            out.writeInt(-KtpConstants.EINVAL);
+                            out.flush();
+                            break;
+                        }
                         byte[] data = new byte[len];
                         in.readFully(data);
 
@@ -157,12 +163,14 @@ public class InitKSocket {
                         } else if (!entry.isBound) {
                             out.writeInt(-KtpConstants.ENOTBOUND);
                         } else {
-                            byte[] msg = entry.rwnd.readMessage();
-                            if (msg != null) {
+                            byte[] msg = entry.rwnd.peekMessage();
+                            if (msg != null && (maxLen < msg.length || maxLen <= 0)) {
+                                out.writeInt(-KtpConstants.ETOOSMALL);
+                            } else if (msg != null) {
+                                entry.rwnd.readMessage();
                                 entry.lastActiveTime = System.currentTimeMillis();
-                                int toRead = Math.min(msg.length, maxLen);
-                                out.writeInt(toRead);
-                                out.write(msg, 0, toRead);
+                                out.writeInt(msg.length);
+                                out.write(msg);
                             } else {
                                 out.writeInt(-KtpConstants.ENOMESSAGE);
                             }
@@ -191,6 +199,13 @@ public class InitKSocket {
                             out.writeInt(0);
                             out.writeInt(0);
                         }
+                        out.flush();
+                        break;
+                    }
+                    case CMD_ALL_ACKED: {
+                        int fd = in.readInt();
+                        KtpSocketEntry entry = shm.getSocket(fd);
+                        out.writeBoolean(entry != null && entry.isAllotted && entry.swnd.isAllAcknowledged());
                         out.flush();
                         break;
                     }
